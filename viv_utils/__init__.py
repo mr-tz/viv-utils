@@ -18,6 +18,11 @@ from viv_utils.idaloader import loadWorkspaceFromIdb
 logger = logging.getLogger(__name__)
 
 
+# vivisect funcmeta key for a bool to indicate if a function is recognized from a library.
+# not expecting anyone to use this, aka private symbol.
+_LIBRARY_META_KEY = "is-library"
+
+
 def getVwSampleMd5(vw):
     return vw.filemeta.values()[0]["md5sum"]
 
@@ -66,31 +71,36 @@ def getWorkspace(fp, reanalyze=False, verbose=False, should_save=True):
     '''
     vw = vivisect.VivWorkspace()
     vw.verbose = verbose
-    # this is pretty insance, but simply prop assignment doesn't work.
+    # this is pretty insane, but simply prop assignment doesn't work.
     vw.config.getSubConfig('viv').getSubConfig('parsers').getSubConfig('pe')['loadresources'] = True
     vw.config.getSubConfig('viv').getSubConfig('parsers').getSubConfig('pe')['nx'] = True
     if fp.endswith('.viv'):
         vw.loadWorkspace(fp)
         assertVwMatchesVivisectLibrary(vw)
         if reanalyze:
-            setVwVivisectLibraryVersion(vw)
-            vw.analyze()
+            analyze(vw)
     else:
         if os.path.exists(fp + ".viv"):
             vw.loadWorkspace(fp + ".viv")
             assertVwMatchesVivisectLibrary(vw)
             if reanalyze:
-                setVwVivisectLibraryVersion(vw)
-                vw.analyze()
+                analyze(vw)
         else:
             vw.loadFromFile(fp)
-            setVwVivisectLibraryVersion(vw)
-            vw.analyze()
+            # TODO the other branches above do not reanalyze functions
+            analyze(vw)
 
     if should_save:
         vw.saveWorkspace()
 
     return vw
+
+
+def analyze(vw):
+    setVwVivisectLibraryVersion(vw)
+    # TODO add a prior analysis module to identify which signature file(s) to use?
+    vw.addFuncAnalysisModule("viv_utils.analysis.vamp")
+    vw.analyze()
 
 
 class LoggingObject(object):
@@ -131,6 +141,25 @@ def set_function_name(vw, va, new_name):
 def get_function_name(vw, va):
     ret_type, ret_name, call_conv, func_name, args = vw.getFunctionApi(va)
     return func_name
+
+
+def make_library_function(vw, va):
+    """
+    mark the function with the given address a library function.
+    the associated accessor is `is_library_function`.
+    if there's no function at the given address, this routine has no effect.
+    note: if its a library function, it should also have a name set.
+    its up to the caller to do this part.
+    args:
+      vw (vivisect.Workspace):
+      va (int): the virtual address of a function.
+    """
+    fmeta = vw.funcmeta.get(va, {})
+    fmeta[_LIBRARY_META_KEY] = True
+
+
+def is_library_function(vw, va):
+    return vw.funcmeta.get(va, {}).get(_LIBRARY_META_KEY, False)
 
 
 class Function(LoggingObject):
